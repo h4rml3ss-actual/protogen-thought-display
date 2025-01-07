@@ -1,0 +1,2 @@
+Notes on directory structure: 
+Create folders in here named after the trigger word you want to trigger an animation when detected.  As an example, you can create a folder named 'dog' within, and place a desired gif within.  When the application starts, it will search for folders within the directory, see that you have placed 'dog' there, and when it hears the word 'dog', it will play an animation from that folder.  
