@@ -28,6 +28,7 @@ visor/
 │   ├── hello/
 │   ├── idle/
 │   └── loading/
+|__ model/
 ├── recognizer/            # Python Vosk recognizer
 │   └── speech_recognizer.py
 ├── src/                   # C++ components
