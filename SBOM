@@ -1,0 +1,77 @@
+ # 🧩 System Design Notes: Protogen Visor Animation System
+ 
+ ## 🔧 Recommended Language and Frameworks
+ 
+ - **Primary Language:** C++ for core logic and animation handling
+   - High performance
+   - Low-level system control
+   - Already used in the existing visor codebase
+ 
+ - **Python** (for Speech Recognition component)
+   - Excellent integration with **Vosk** (offline speech-to-text)
+   - Quick development and flexibility for dynamic word detection
+   - Performs keyword matching against the loaded folder names
+   - Sends only matched keywords to C++ via pipe
+ 
+ ## 📁 Modular Architecture
+ 
+ Suggested module breakdown:
+ 
+ 1. **AnimationManager (C++)**
+    - Preloads and caches animations
+    - Handles random selection and playback
+    - Supports keyword-triggered and idle animation playback
+ 
+ 2. **SpeechRecognizer (Python)**
+    - Listens for microphone input
+    - Performs offline speech-to-text
+    - Identifies keywords and relays to AnimationManager
+ 
+ 3. **MessageHandler (C++)**
+    - Monitors idle time
+    - Prints quirky/random messages to terminal
+ 
+ 4. **ControlInterface**
+    - Keyboard interface (e.g., press 'Q' to quit)
+    - Optional: GUI overlay for debug or live stats
+ 
+ ## 🧠 Design Goals
+ 
+ - Fully offline functionality
+ - Minimal latency for animation trigger
+ - Cross-thread communication (pipes or sockets)
+ - Modular, swappable parts (e.g., replace Vosk with Whisper later if needed)
+ - Runs at boot with no manual input
+ - Compatible with Raspberry Pi 5 and Raspberry Pi OS
+- Runs identically whether started manually or via system startup (e.g., `systemd`, autostart script)
+ 
+ ## 🔌 Communication Between Components
+ 
+ - Use a **unidirectional pipe** to pass matched keywords from Python → C++ (not stdout/stderr).
+ - Message format: single matched keyword as plain text (one per line).
+ 
+ ## 📂 Folder Structure
+ 
+ ```
+ /visor/
+ ├── animations/
+ │   ├── loading/
+ │   ├── idle/
+ │   ├── hello/
+ │   └── ...
+ ├── src/
+ │   ├── main.cpp
+ │   ├── animation_manager.cpp
+ │   ├── animation_manager.h
+ │   └── ...
+ ├── recognizer/
+ │   └── speech_recognizer.py
+ ├── messages.txt
+ └── SBOM
+ ```
+ 
+ ## 🔄 Future Enhancements
+ 
+ - Add support for alternate languages or speech models
+ - Add subtitle rendering with recognized word
+ - Add system health overlay (temperature, CPU usage, etc.)
