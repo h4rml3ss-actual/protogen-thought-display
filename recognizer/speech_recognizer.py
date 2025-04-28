@@ -64,6 +64,8 @@ def send_spectrum(freq_data):
 def recognize_audio():
     model = vosk.Model("model")
     recognizer = vosk.KaldiRecognizer(model, 44100)
+    recognize_audio.last_partial = ""
+    last_partial_time = time.time()
 
     while True:
         try:
@@ -73,7 +75,9 @@ def recognize_audio():
             fft = np.clip(fft / np.max(fft), 0, 1) if np.max(fft) != 0 else fft
             send_spectrum(fft)
         except queue.Empty:
-            continue
+            # Send a soft idle spectrum when no new audio is detected
+            idle_fft = np.full(64, 0.02)
+            send_spectrum(idle_fft)
 
         if recognizer.AcceptWaveform(data):
             result = json.loads(recognizer.Result())
@@ -87,8 +91,13 @@ def recognize_audio():
                     send_to_pipe(word)
                     break
         else:
-            # Optional: print partial result
-            pass
+            partial = json.loads(recognizer.PartialResult())
+            partial_text = partial.get("partial", "")
+            now = time.time()
+            if partial_text and partial_text != recognize_audio.last_partial and now - last_partial_time > 0.15:
+                recognize_audio.last_partial = partial_text
+                last_partial_time = now
+                send_subtitle(partial_text)
 
 def main():
     if not os.path.exists(pipe_path):
@@ -98,18 +107,37 @@ def main():
 
     load_trigger_words("animations")
 
+    # Find a valid input device automatically
+    device_index = None
+    for idx, dev in enumerate(sd.query_devices()):
+        if dev['max_input_channels'] > 0:
+            device_index = idx
+            break
+
+    if device_index is None:
+        print(f"{CLR_YELLOW}[PY] :: [ERR] No input device found!{CLR_RESET}")
+        sys.exit(1)
+
+    device_info = sd.query_devices(device_index)
+    channels = device_info['max_input_channels']
+
     with sd.RawInputStream(
         samplerate=44100,
         blocksize=4000,
         dtype="int16",
-        channels=1,
+        channels=channels,
         callback=audio_callback,
-        device=0  # <-- use USB Audio Device
-    ):
-        thread = threading.Thread(target=recognize_audio, daemon=True)
-        thread.start()
-        print(f"{CLR_PURPLE}[PY] :: [L1ST3N1NG F0R S33CH...] Ctrl+C = D3TACH{CLR_RESET}")
-        thread.join()
+        device=device_index
+    ) as stream:
+        try:
+            thread = threading.Thread(target=recognize_audio, daemon=True)
+            thread.start()
+            print(f"{CLR_PURPLE}[PY] :: [L1ST3N1NG F0R S33CH...] Ctrl+C = D3TACH{CLR_RESET}")
+            thread.join()
+        finally:
+            stream.stop()
+            stream.close()
+            print(f"{CLR_PINK}[PY] :: [AUDI0 STR34M CL0S3D]{CLR_RESET}")
 
 if __name__ == "__main__":
     try:

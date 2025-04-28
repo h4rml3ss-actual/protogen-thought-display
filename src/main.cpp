@@ -119,30 +119,59 @@ int main() {
         "570P 53LF 5N17CH1N",
         "r3333333m3mb3r, 50m30n3 15 4lw4ay5 l1573n1ng..."
     };
+
+    // Glitch font is now always FONT_HERSHEY_DUPLEX
+    std::vector<cv::Scalar> neonColors = {
+        cv::Scalar(255, 20, 147),  // pink
+        cv::Scalar(128, 0, 128),   // purple
+        cv::Scalar(0, 255, 0),     // green
+        cv::Scalar(255, 255, 0),   // yellow
+        cv::Scalar(0, 255, 255)    // cyan
+    };
+
     size_t messageIndex = 0;
     auto lastMessageTime = Clock::now();
-    // Randomize quirky message interval between 7 and 15 seconds
     std::mt19937 rng(std::random_device{}());
-    std::uniform_int_distribution<int> intervalDist(7, 15);
-    std::chrono::seconds messageInterval(intervalDist(rng));
+    // Progressive halving message interval system for quirky messages
+    std::chrono::milliseconds baseMessageInterval(10000); // 10s
+    std::chrono::milliseconds currentMessageInterval = baseMessageInterval;
+    const std::chrono::milliseconds minMessageInterval(1000); // 1s minimum
 
     // Create a persistent fullscreen window and black frame
     static cv::Mat frame(720, 1280, CV_8UC3, cv::Scalar(0, 0, 0));
     cv::namedWindow("SubtitleOverlay", cv::WINDOW_NORMAL);
     cv::setWindowProperty("SubtitleOverlay", cv::WND_PROP_FULLSCREEN, cv::WINDOW_FULLSCREEN);
-    // Glitch window hide logic
-    bool visualizerVisible = true;
-    auto lastHideTime = Clock::now();
-    const std::chrono::seconds glitchWindowDuration(4);
+
+    // Glitch management variables
+    std::vector<std::chrono::milliseconds> glitchIntervals = {
+        std::chrono::milliseconds(10000),
+        std::chrono::milliseconds(5000),
+        std::chrono::milliseconds(2500),
+        std::chrono::milliseconds(1250),
+        std::chrono::milliseconds(750)
+    };
+    size_t currentGlitchStage = 0;
+    std::chrono::milliseconds glitchInterval = glitchIntervals[currentGlitchStage];
+    auto lastGlitchSpawn = Clock::now();
+    struct GlitchMessage {
+        std::string text;
+        int font;
+        double fontScale;
+        int thickness;
+        cv::Scalar color;
+        cv::Point basePos;
+        Clock::time_point spawnTime;
+        float lifetimeSec;
+    };
+    std::vector<GlitchMessage> activeGlitches;
+    // For robust startup delay on random glitches
+    auto glitchStartupTime = Clock::now();
+    bool glitchStartupDelayPassed = false;
+
+    static size_t currentLine = 0; // Tracks current subtitle line being rendered
 
     // Main event loop
     while (keepRunning.load()) {
-        // Restore visualizer window if hidden and timeout passed
-        if (!visualizerVisible && Clock::now() - lastHideTime >= glitchWindowDuration) {
-            cv::namedWindow("SubtitleOverlay", cv::WINDOW_NORMAL);
-            cv::setWindowProperty("SubtitleOverlay", cv::WND_PROP_FULLSCREEN, cv::WINDOW_FULLSCREEN);
-            visualizerVisible = true;
-        }
         ssize_t bytesRead = read(pipeFd, buffer, sizeof(buffer) - 1);
         if (bytesRead > 0) {
             buffer[bytesRead] = '\0';  // null-terminate
@@ -152,6 +181,8 @@ int main() {
             std::cout << CLR_GREEN << "[Main] :: [K3YWORD ACQUIRED] >> " << keyword << CLR_RESET << std::endl;
             animationManager.playAnimation(keyword);
             lastAnimationTime = Clock::now();
+            // Reset glitch timing if user activity detected
+            currentMessageInterval = baseMessageInterval;
         }
 
         // Read subtitle pipe
@@ -159,49 +190,26 @@ int main() {
         ssize_t subRead = read(subtitleFd, subtitleBuf, sizeof(subtitleBuf) - 1);
         if (subRead > 0) {
             subtitleBuf[subRead] = '\0';
-            subtitleText = std::string(subtitleBuf);
-            subtitleText.erase(subtitleText.find_last_not_of(" \n\r\t") + 1);
-            lastSubtitleTime = Clock::now();
+            std::string newText = std::string(subtitleBuf);
+            newText.erase(newText.find_last_not_of(" \n\r\t") + 1);
+            static std::string lastSubtitleText;
+            if (newText != subtitleText) {
+                subtitleText = newText;
+                lastSubtitleText = newText;
+                lastSubtitleTime = Clock::now();
+                currentLine = 0; // Reset line animation when subtitle changes
+                // Reset glitch timer and interval progression to initial state when subtitle arrives
+                currentGlitchStage = 0;
+                glitchInterval = glitchIntervals[currentGlitchStage];
+                lastGlitchSpawn = Clock::now();
+            }
         }
 
-        // Clear the frame to black each frame before drawing
+        // --- Draw order: clear, spectrum, then subtitles, then glitches ---
+        // 1. Clear the frame to black each frame before drawing
         frame.setTo(cv::Scalar(0, 0, 0));
 
-        if (!subtitleText.empty() && Clock::now() - lastSubtitleTime < subtitleDisplayTime) {
-            // Wrap subtitleText into lines that fit screen width
-            std::vector<std::string> wrappedLines;
-            std::istringstream iss(subtitleText);
-            std::string word, line;
-            int maxWidth = frame.cols - 100;
-
-            while (iss >> word) {
-                std::string testLine = line.empty() ? word : line + " " + word;
-                int baseline = 0;
-                cv::Size testSize = cv::getTextSize(testLine, cv::FONT_HERSHEY_DUPLEX, 2.5, 5, &baseline);
-                if (testSize.width > maxWidth) {
-                    if (!line.empty()) wrappedLines.push_back(line);
-                    line = word;
-                } else {
-                    line = testLine;
-                }
-            }
-            if (!line.empty()) wrappedLines.push_back(line);
-
-            int totalHeight = wrappedLines.size() * 80;
-            int y = (frame.rows - totalHeight) / 2;
-            for (const auto& ln : wrappedLines) {
-                int baseline = 0;
-                cv::Size textSize = cv::getTextSize(ln, cv::FONT_HERSHEY_DUPLEX, 2.5, 5, &baseline);
-                int x = (frame.cols - textSize.width) / 2;
-                // Glow layers
-                cv::putText(frame, ln, cv::Point(x, y), cv::FONT_HERSHEY_DUPLEX, 2.5, cv::Scalar(0, 64, 0), 10);
-                cv::putText(frame, ln, cv::Point(x, y), cv::FONT_HERSHEY_DUPLEX, 2.5, cv::Scalar(0, 128, 0), 6);
-                cv::putText(frame, ln, cv::Point(x, y), cv::FONT_HERSHEY_DUPLEX, 2.5, cv::Scalar(0, 255, 0), 3);
-                y += 80;
-            }
-        }
-
-        // Prepare audio spectrum buffer for FFT integration
+        // 2. Prepare audio spectrum buffer for FFT integration
         static float spectrum[64] = {0};
         char spectrumBuf[1024];
         ssize_t spectrumRead = read(spectrumFd, spectrumBuf, sizeof(spectrumBuf) - 1);
@@ -218,9 +226,14 @@ int main() {
                 }
                 ++idx;
             }
+        } else if (spectrumRead <= 0) {
+            // If no new spectrum data, decay the spectrum slowly
+            for (int i = 0; i < 64; ++i) {
+                spectrum[i] *= 0.9f;
+            }
         }
 
-        // Simulate basic radial audio visualizer using spectrum buffer
+        // 3. Draw the audio visualizer spectrum
         const int numBars = 64;
         const float radius = 200.0f;
         const float maxBarLength = 100.0f;
@@ -229,51 +242,200 @@ int main() {
 
         for (int i = 0; i < numBars; ++i) {
             float angle = i * angleStep;
-            float amplitude = spectrum[i]; // use parsed FFT values
-
+            float amplitude = spectrum[i];
             float len = amplitude * maxBarLength;
             cv::Point p1(center.x + std::cos(angle) * radius,
                          center.y + std::sin(angle) * radius);
             cv::Point p2(center.x + std::cos(angle) * (radius + len),
                          center.y + std::sin(angle) * (radius + len));
-
             cv::line(frame, p1, p2, cv::Scalar(0, 255 - i * 4, 0), 2, cv::LINE_AA);
         }
 
-        if (visualizerVisible)
-            cv::imshow("SubtitleOverlay", frame);
+        // 4. Subtitle line drawing (after spectrum)
+        if (!subtitleText.empty() && Clock::now() - lastSubtitleTime < subtitleDisplayTime) {
+            std::vector<std::string> lines;
+            std::istringstream iss(subtitleText);
+            std::string word;
+            std::string line;
+            int wordsPerLine = 3;
+            int count = 0;
 
-        // Capture key press from OpenCV window
-        int key = visualizerVisible ? cv::waitKey(1) : -1;
+            while (iss >> word) {
+                if (!line.empty()) line += " ";
+                line += word;
+                count++;
+                if (count >= wordsPerLine) {
+                    lines.push_back(line);
+                    line.clear();
+                    count = 0;
+                }
+            }
+            if (!line.empty()) lines.push_back(line);
+
+            static auto lastLineUpdate = Clock::now();
+            const std::chrono::milliseconds lineDelay(100);
+
+            if (currentLine < lines.size() && Clock::now() - lastLineUpdate >= lineDelay) {
+                currentLine++;
+                lastLineUpdate = Clock::now();
+            }
+
+            int totalHeight = lines.size() * 80;
+            int y = (frame.rows - totalHeight) / 2 + 60;
+            for (size_t i = 0; i < currentLine && i < lines.size(); ++i) {
+                const auto& ln = lines[i];
+                int baseline = 0;
+                cv::Size textSize = cv::getTextSize(ln, cv::FONT_HERSHEY_DUPLEX, 2.5, 5, &baseline);
+                int x = (frame.cols - textSize.width) / 2;
+
+                cv::putText(frame, ln, cv::Point(x, y), cv::FONT_HERSHEY_DUPLEX, 2.5, cv::Scalar(0, 64, 0), 10);
+                cv::putText(frame, ln, cv::Point(x, y), cv::FONT_HERSHEY_DUPLEX, 2.5, cv::Scalar(0, 128, 0), 6);
+                cv::putText(frame, ln, cv::Point(x, y), cv::FONT_HERSHEY_DUPLEX, 2.5, cv::Scalar(0, 255, 0), 3);
+                y += 80;
+            }
+
+            if (Clock::now() - lastSubtitleTime > subtitleDisplayTime) {
+                currentLine = 0;
+            }
+        }
+
+        // --- Glitch drawing and spawning (draw after subtitles) ---
+        auto now = Clock::now();
+        // Remove expired glitches
+        activeGlitches.erase(
+            std::remove_if(activeGlitches.begin(), activeGlitches.end(), [&](const GlitchMessage& g) {
+                return std::chrono::duration<float>(now - g.spawnTime).count() > g.lifetimeSec;
+            }),
+            activeGlitches.end()
+        );
+        // Draw glitches with fading and jitter/trails (limit trails to 2 for perf)
+        for (const auto& g : activeGlitches) {
+            float age = std::chrono::duration<float>(now - g.spawnTime).count();
+            float alpha = std::max(0.0f, 1.0f - age / g.lifetimeSec);
+            // Enhanced flicker: keep minimum brightness higher
+            float flicker = 0.8f + 0.2f * std::sin(age * 80.0f);
+            float finalAlpha = alpha * flicker;
+            float jitterX = std::sin(age * 20.0f) * 4.0f + (rng() % 3 - 1);
+            float jitterY = std::cos(age * 25.0f) * 4.0f + (rng() % 3 - 1);
+            for (int trail = 0; trail < 2; ++trail) {
+                float trailAlpha = finalAlpha * (1.0f - trail * 0.3f);
+                float trailJitterX = jitterX + (rng() % 7 - 3); // jitter range -3 to +3 px
+                float trailJitterY = jitterY + (rng() % 7 - 3);
+                // Boost trail color brightness for vivid effect
+                cv::Scalar boostedColor = g.color * (trailAlpha * 1.2f);
+                boostedColor[0] = std::min(boostedColor[0], 255.0);
+                boostedColor[1] = std::min(boostedColor[1], 255.0);
+                boostedColor[2] = std::min(boostedColor[2], 255.0);
+                cv::Point trailPos(g.basePos.x + trailJitterX, g.basePos.y + trailJitterY);
+                // Guard final draw position
+                if (trailPos.x >= 0 && trailPos.x < frame.cols - 50 &&
+                    trailPos.y >= 0 && trailPos.y < frame.rows - 50) {
+                    cv::putText(frame, g.text, trailPos, g.font, g.fontScale, boostedColor, g.thickness, cv::LINE_AA);
+                }
+            }
+        }
+        // Glitch startup delay (5s after program start)
+        if (!glitchStartupDelayPassed) {
+            if (now - glitchStartupTime >= std::chrono::seconds(5)) {
+                glitchStartupDelayPassed = true;
+                lastGlitchSpawn = now;
+            }
+        }
+        // --- Robust glitch spawning: independent from TRACE messages ---
+        // Only spawn a random glitch if:
+        //  - at least 5s have passed since startup
+        //  - no subtitle is visible
+        //  - glitchInterval timer elapsed
+        if (glitchStartupDelayPassed &&
+            (subtitleText.empty() || now - lastSubtitleTime > subtitleDisplayTime)) {
+            if (now - lastGlitchSpawn >= glitchInterval) {
+                lastGlitchSpawn = now;
+                // Progress glitch interval stage if possible
+                if (currentGlitchStage < glitchIntervals.size() - 1)
+                    currentGlitchStage++;
+                glitchInterval = glitchIntervals[currentGlitchStage];
+                // Clear old glitches before spawning
+                activeGlitches.clear();
+                // Spawn new random glitch message
+                std::string glitchText = quirkyMessages[rng() % quirkyMessages.size()];
+                int font = cv::FONT_HERSHEY_DUPLEX;
+                double fontScale = 1.0 + (rng() % 200) / 100.0; // range 1.0 - 3.0 max
+                int thickness = 1 + (rng() % 4);
+                cv::Scalar color = neonColors[rng() % neonColors.size()];
+                int x = 50 + (rng() % (frame.cols - 100)); // 50px margin
+                int y = 50 + (rng() % (frame.rows - 100));
+                GlitchMessage glitch = {
+                    glitchText,
+                    font,
+                    fontScale,
+                    thickness,
+                    color,
+                    cv::Point(x, y),
+                    now,
+                    3.0f
+                };
+                activeGlitches.push_back(glitch);
+            }
+        }
+        // If a subtitle appears, force-reset glitch timing for next random glitch
+        if (!subtitleText.empty() && now - lastSubtitleTime < subtitleDisplayTime) {
+            currentGlitchStage = 0;
+            glitchInterval = glitchIntervals[currentGlitchStage];
+            lastGlitchSpawn = now;
+            // Also clear glitches if desired (for clean state)
+            // activeGlitches.clear();
+        }
+
+        // Show frame and handle key input after all drawing
+        cv::imshow("SubtitleOverlay", frame);
+        int key = cv::waitKey(1);
         if (key == 'q' || key == 'Q') {
             std::cout << CLR_PINK << "[Main] :: [Q detected via window -- disengaging interface]" << CLR_RESET << std::endl;
             keepRunning = false;
         }
 
-        // Check for idle time and play idle animation if needed
+        // Idle animation and quirky messages (unchanged)
         if (Clock::now() - lastAnimationTime >= idleThreshold) {
             std::cout << CLR_YELLOW << "[Main] :: [SYS.IDLE > 30s] -- TR1GGERING 1DL3 ANIM" << CLR_RESET << std::endl;
             animationManager.playAnimation("idle");
             lastAnimationTime = Clock::now();
         }
 
-        // Print quirky message at a random interval (7-15s) only if no new subtitles have been received in that interval
-        if (Clock::now() - lastSubtitleTime >= messageInterval && Clock::now() - lastMessageTime >= messageInterval) {
-            std::cout << CLR_PINK << "[Quirk] " << quirkyMessages[messageIndex] << CLR_RESET << std::endl;
+        // --- TRACE quirky message logic (completely independent from glitch spawning) ---
+        if (Clock::now() - lastSubtitleTime >= currentMessageInterval && Clock::now() - lastMessageTime >= currentMessageInterval) {
+            std::cout << CLR_PINK << "[TRACE] " << quirkyMessages[messageIndex] << CLR_RESET << std::endl;
+            // Also spawn visually (with glitch effect, clear previous)
+            std::string glitchText = quirkyMessages[messageIndex];
+            int font = cv::FONT_HERSHEY_DUPLEX;
+            double fontScale = 1.0 + (rng() % 200) / 100.0; // range 1.0 - 3.0 max
+            int thickness = 1 + (rng() % 4);
+            cv::Scalar color = neonColors[rng() % neonColors.size()];
+            int x = 50 + (rng() % (frame.cols - 100)); // 50px margin
+            int y = 50 + (rng() % (frame.rows - 100));
+            GlitchMessage glitch = {
+                glitchText,
+                font,
+                fontScale,
+                thickness,
+                color,
+                cv::Point(x, y),
+                Clock::now(),
+                3.0f
+            };
+            // Clear old glitch immediately for message-triggered glitches too
+            activeGlitches.clear();
+            activeGlitches.push_back(glitch);
             messageIndex = (messageIndex + 1) % quirkyMessages.size();
             lastMessageTime = Clock::now();
-            // Re-randomize the interval for next message
-            messageInterval = std::chrono::seconds(intervalDist(rng));
-
-            // Hide visualizer window for glitch message visibility
-            if (visualizerVisible) {
-                cv::destroyWindow("SubtitleOverlay");
-                visualizerVisible = false;
-                lastHideTime = Clock::now();
-            }
+            currentMessageInterval = std::max(minMessageInterval, currentMessageInterval / 2);
+            // Reset random glitch spawn timing and interval progression cleanly to avoid race with TRACE
+            currentGlitchStage = 0;
+            glitchInterval = glitchIntervals[currentGlitchStage];
+            lastGlitchSpawn = Clock::now();
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        // Sleep at end of loop to cap FPS (~30 FPS = 33ms per frame)
+        std::this_thread::sleep_for(std::chrono::milliseconds(33));
     }
 
     tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios);

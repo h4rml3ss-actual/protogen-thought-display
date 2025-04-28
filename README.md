@@ -1,4 +1,3 @@
-
 # 🦾 Protogen Thought Display System
 
 A modular Raspberry Pi-based animation and subtitle system built for live display via visor, helmet, or glasses-mounted HUD. Uses offline voice recognition to trigger animations and display real-time subtitles in a stylized cyberpunk aesthetic.
@@ -7,7 +6,9 @@ A modular Raspberry Pi-based animation and subtitle system built for live displa
 
 - 🎙️ Offline voice recognition using [Vosk](https://alphacephei.com/vosk/)
 - 🎞️ Keyword-triggered animation playback via `mpv`
-- 🧠 Real-time subtitles displayed on screen (with cyberpunk styling)
+- ⌨️ Subtitles appear with a typewriter animation, line-by-line
+- 🌀 Circular real-time audio visualizer using microphone FFT data
+- 👾 Terminal "glitch" messages appear after inactivity and temporarily hide the display
 - 🔄 Idle animations after periods of silence
 - 🧠 Quirky personality messages when quiet
 - 🎛️ System launches all components automatically (C++ HUD + Python recognizer)
@@ -58,6 +59,10 @@ visor/
 
 3. Make sure your `animations/` folder is populated with GIF or WebP files.
 
+⚠️ Note: Due to `.gitignore`, you must manually ensure the following folders and contents exist:
+- `animations/` with subfolders matching your trigger words, each containing GIF or WebP files
+- `model/` containing your offline Vosk model (e.g., `vosk-model-small-en-us-0.15`)
+
 4. Start the HUD:
    ```bash
    ./build/visor
@@ -67,8 +72,9 @@ visor/
 
 ## 💬 Subtitles & Trigger Logic
 
-- Subtitles are streamed from the Python process over a named pipe and rendered as HUD overlays.
-- Words matching folder names in `animations/` will trigger playback.
+- Subtitles appear on screen with a typewriter-style animation, breaking text across multiple lines.
+- Words matching folder names in `animations/` will trigger a visual response.
+- If no new subtitles arrive for a randomized interval, a "glitch" message is shown in the terminal and the visor window briefly hides.
 
 ## 📦 Dependencies
 
@@ -78,6 +84,8 @@ visor/
 
 ## 🔮 Future Ideas
 
+- Per-character subtitle rendering animation
+- Optional subtitle history or scrollback
 - Add gesture control input
 - System metrics (CPU temp, net usage) overlay
 - Real-time audio visualizer sync
