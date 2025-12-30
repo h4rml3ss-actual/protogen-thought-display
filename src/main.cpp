@@ -10,6 +10,7 @@
 #include <atomic>
 #include <thread>
 #include <chrono>
+#include <future>
 #include <fcntl.h>   // open
 #include <unistd.h>  // read
 #include <cstring>   // strerror
@@ -34,6 +35,10 @@ std::atomic<bool> keepRunning(true);
 // Track the Python child process ID
 pid_t pythonPid = -1;
 
+// Background thread for key-triggered sound effects
+std::thread soundEffectThread;
+std::atomic<bool> soundEffectRunning(true);
+
 // Signal handler for SIGINT/SIGTERM
 void signalHandler(int signal) {
     std::cerr << "[Main] Caught signal, initiating shutdown..." << std::endl;
@@ -45,7 +50,60 @@ int main() {
     std::signal(SIGINT, signalHandler);
     std::signal(SIGTERM, signalHandler);
 
-    std::cout << CLR_PURPLE << "[Main] :: [Booting . . . Welcome to PR0T0-V1Z]" << CLR_RESET << std::endl;
+    // Set terminal to non-canonical mode for keypress detection
+    termios orig_termios, raw;
+    tcgetattr(STDIN_FILENO, &orig_termios);
+    raw = orig_termios;
+    raw.c_lflag &= ~(ICANON | ECHO);
+    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+
+    // Set stdin to non-blocking so the sound thread can exit cleanly
+    int origStdinFlags = fcntl(STDIN_FILENO, F_GETFL, 0);
+    fcntl(STDIN_FILENO, F_SETFL, origStdinFlags | O_NONBLOCK);
+
+    // Start a background thread to handle raw keypress-based sound effects (non-blocking)
+    // Launch sound effect listener in background
+    soundEffectThread = std::thread([] {
+        char ch;
+        while (soundEffectRunning.load()) {
+            if (read(STDIN_FILENO, &ch, 1) > 0) {
+                // Each numeric key maps to a corresponding sound effect (1-9)
+                switch (ch) {
+                    // Use ffplay for broader audio format support (e.g., .mp3, .ogg)
+                    case '1':
+                        system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/dialup.ogg &");
+                        break;
+                    case '2':
+                        system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/geiger.wav &");
+                        break;
+                    case '3':
+                        system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/codec.mp3 &");
+                        break;
+                    case '4':
+                        system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/shodan.wav &");
+                        break;
+                    case '5':
+                        system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/touchtone dial.mp3 &");
+                        break;
+                    case '6':
+                        system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/alarm.mp3 &");
+                        break;
+                    case '7':
+                        system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/2600-hz-tone.mp3 &");
+                        break;
+                    case '8':
+                        system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/womp.mp3 &");
+                        break;
+                    case '9':
+                        system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/rimshot.mp3 &");
+                        break;
+                    default:
+                        break;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    });
 
     // Initialize AnimationManager
     AnimationManager animationManager;
@@ -53,6 +111,8 @@ int main() {
 
     // Launch Python recognizer
     std::cout << CLR_CYAN << "[Main] :: [Launching $peech L1$ten3r . . .]" << CLR_RESET << std::endl;
+    // Play startup sound (non-blocking)
+    system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/vaio.mp3 &");
     pid_t pid = fork();
     if (pid == 0) {
         // Child process
@@ -94,12 +154,6 @@ int main() {
         std::cerr << "[Main] Failed to open spectrum pipe: " << strerror(errno) << std::endl;
     }
 
-    // Set terminal to non-canonical mode for keypress detection
-    termios orig_termios, raw;
-    tcgetattr(STDIN_FILENO, &orig_termios);
-    raw = orig_termios;
-    raw.c_lflag &= ~(ICANON | ECHO);
-    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
 
     char buffer[256];
 
@@ -389,9 +443,45 @@ int main() {
         // Show frame and handle key input after all drawing
         cv::imshow("SubtitleOverlay", frame);
         int key = cv::waitKey(1);
-        if (key == 'q' || key == 'Q') {
-            std::cout << CLR_PINK << "[Main] :: [Q detected via window -- disengaging interface]" << CLR_RESET << std::endl;
-            keepRunning = false;
+        // Handle quit and numeric-key sound effects via the OpenCV window
+        switch (key) {
+            case 'q': case 'Q':
+                std::cout << CLR_PINK << "[Main] :: [Q detected via window -- disengaging interface]" << CLR_RESET << std::endl;
+                keepRunning = false;
+                break;
+            case '1':
+                system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/dialup.ogg &");
+                break;
+            case '2':
+                system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/geiger.wav &");
+                break;
+            case '3':
+                system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/codec.mp3 &");
+                break;
+            case '4':
+                system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/shodan.wav &");
+                break;
+            case '5':
+                system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/touchtone\\ dial.mp3 &");
+                break;
+            case '6':
+                // Corrected path prefix: /home/operator/protogen-thought-display
+                system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/alarm.mp3 &");
+                break;
+            case '7':
+                // Corrected path prefix: /home/operator/protogen-thought-display
+                system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/2600-hz-tone.mp3 &");
+                break;
+            case '8':
+                // Corrected path prefix: /home/operator/protogen-thought-display
+                system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/womp.mp3 &");
+                break;
+            case '9':
+                // Corrected path prefix: /home/operator/protogen-thought-display
+                system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/rimshot.mp3 &");
+                break;
+            default:
+                break;
         }
 
         // Idle animation and quirky messages (unchanged)
@@ -439,6 +529,8 @@ int main() {
     }
 
     tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios);
+    // Restore original stdin flags
+    fcntl(STDIN_FILENO, F_SETFL, origStdinFlags);
     cv::destroyWindow("SubtitleOverlay");
 
     std::cout << CLR_CYAN << "[Main] :: [SYS.EXI7() ~ cleaning up . . .]" << CLR_RESET << std::endl;
@@ -449,12 +541,29 @@ int main() {
     close(spectrumFd);
     unlink(spectrumPipePath);
 
-    // Terminate the Python recognizer process if running
+    // Cleanly terminate Python recognizer with timeout, then force if needed
     if (pythonPid > 0) {
         std::cout << CLR_YELLOW << "[Main] :: [Terminating subprocess PID " << pythonPid << "]" << CLR_RESET << std::endl;
+        // Request graceful shutdown
         kill(pythonPid, SIGTERM);
-        waitpid(pythonPid, nullptr, 0); // block until child exits
+        // Wait up to 1 second for the child to exit
+        for (int i = 0; i < 10; ++i) {
+            if (waitpid(pythonPid, nullptr, WNOHANG) == pythonPid) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        // If still running, force kill
+        if (kill(pythonPid, 0) == 0) {
+            std::cerr << "[Main] :: [Child did not exit, sending SIGKILL]" << std::endl;
+            kill(pythonPid, SIGKILL);
+            waitpid(pythonPid, nullptr, 0);
+        }
     }
+
+    // Clean shutdown of sound effect listener thread
+    soundEffectRunning = false;
+    if (soundEffectThread.joinable()) soundEffectThread.join();
 
     return 0;
 }
