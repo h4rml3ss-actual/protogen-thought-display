@@ -9,7 +9,6 @@ import time
 import numpy as np
 
 import pyaudio
-from scipy.signal import resample
 
 # ANSI color codes for cyberpunk theme
 CLR_RESET = "\033[0m"
@@ -20,7 +19,7 @@ CLR_CYAN = "\033[38;2;0;255;255m"
 CLR_YELLOW = "\033[38;2;255;255;0m"
 
 # Globals
-audio_queue = queue.Queue()
+audio_queue = queue.Queue(maxsize=8)  # bounded to avoid unbounded lag if processing stalls
 trigger_words = set()
 recognized_word = None
 subtitle_pipe_path = "/tmp/visor_subtitles"
@@ -79,23 +78,16 @@ def send_spectrum(freq_data):
         pipe_handles["spectrum"] = None
         print(f"{CLR_YELLOW}[PY] :: [SPECTRUM PIPE ERR] >> {e}{CLR_RESET}", file=sys.stderr)
 
-# Initializes audio input/output stream with processing: speech recognition, spectrum analysis, and voice modulation
-def start_streaming_audio(model, recognizer):
-    # Initialize pitch factors for glitchy sliding voice modulation
-    pa = pyaudio.PyAudio()
-    input_rate = 16000
-    modulation_freq = 70
-    buffer_size = 1024
-    phase = 0
-    current_pitch_factor = 0.7
-    target_pitch_factor = 0.7
-
-    def callback(in_data, frame_count, time_info, status):
-        nonlocal phase
-        nonlocal current_pitch_factor, target_pitch_factor
+# Run recognition + spectrum in a worker to keep the audio callback lightweight
+def processing_worker(recognizer):
+    while True:
+        try:
+            in_data = audio_queue.get(timeout=1)
+        except queue.Empty:
+            continue
 
         # Spectrum
-        samples = np.frombuffer(in_data, dtype=np.int16) / 32768.0
+        samples = np.frombuffer(in_data, dtype=np.int16).astype(np.float32) / 32768.0
         fft = np.abs(np.fft.rfft(samples, n=128))[:64]
         fft = np.clip(fft / np.max(fft), 0, 1) if np.max(fft) != 0 else fft
         send_spectrum(fft)
@@ -116,43 +108,33 @@ def start_streaming_audio(model, recognizer):
             if partial_text:
                 send_subtitle(partial_text)
 
-        # Voice modulation: pitch-down, ring modulation, echo
+
+# Initializes audio input/output stream with lightweight callback for low latency
+def start_streaming_audio(recognizer):
+    pa = pyaudio.PyAudio()
+    input_rate = 16000
+    modulation_freq = 70
+    buffer_size = 1024
+    phase = 0
+
+    def callback(in_data, frame_count, time_info, status):
+        nonlocal phase
+        # Keep queue bounded to avoid runaway latency
+        try:
+            while audio_queue.full():
+                audio_queue.get_nowait()
+            audio_queue.put_nowait(in_data)
+        except queue.Full:
+            pass
+
+        # Lightweight ring modulation passthrough for monitoring
         audio = np.frombuffer(in_data, dtype=np.int16).astype(np.float32)
-
-        # Smoothly modulate pitch in real time based on loudness and random drift
-        # Dynamic pitch modulation based on voice amplitude and random drift
-        volume = np.abs(audio).mean()
-        # Narrower pitch range for more intelligible speech
-        if np.random.rand() < 0.05:
-            target_pitch_factor = 0.9 - 0.2 * np.clip(volume, 0, 1)  # louder = lower pitch
-        alpha = 0.1  # Smoothing factor
-        current_pitch_factor += alpha * (target_pitch_factor - current_pitch_factor)
-        audio = resample(audio, int(len(audio) * current_pitch_factor))
-
-        if len(audio) < frame_count:
-            audio = np.pad(audio, (0, frame_count - len(audio)))
-        elif len(audio) > frame_count:
-            audio = audio[:frame_count]
-
-        # Ring modulation
         t = (np.arange(frame_count) + phase) / input_rate
         modulator = 0.5 * (1.0 + np.sin(2 * np.pi * modulation_freq * t))
         audio *= modulator
 
-        # Reduced static intensity for better voice clarity
-        noise = np.random.normal(0, 200, size=frame_count).astype(np.float32)
-        audio += noise
-
-        phase += frame_count
-        phase %= input_rate
-
-        # Add reverb (basic echo effect)
-        echo_strength = 0.3
-        delay_samples = 200
-        if frame_count > delay_samples:
-            audio[delay_samples:] += echo_strength * audio[:-delay_samples]
-
-        audio = np.clip(audio, -32768, 32767).astype(np.int16)  # Clamp final output
+        phase = (phase + frame_count) % input_rate
+        audio = np.clip(audio, -32768, 32767).astype(np.int16)
         return (audio.tobytes(), pyaudio.paContinue)
 
     stream = pa.open(format=pyaudio.paInt16,
@@ -163,6 +145,9 @@ def start_streaming_audio(model, recognizer):
                      frames_per_buffer=buffer_size,
                      stream_callback=callback)
     stream.start_stream()
+
+    # Spawn worker after stream starts so recognizer is ready
+    threading.Thread(target=processing_worker, args=(recognizer,), daemon=True).start()
     return stream
 
 # Main loop that sets up pipes, loads model, and starts the audio processing loop
@@ -176,7 +161,7 @@ def main():
 
     model = vosk.Model("model")
     recognizer = vosk.KaldiRecognizer(model, 16000)
-    stream = start_streaming_audio(model, recognizer)
+    stream = start_streaming_audio(recognizer)
     print(f"{CLR_PURPLE}[PY] :: [L1ST3N1NG W1TH R0B0-V0C0D3R]{CLR_RESET}")
     try:
         while True:

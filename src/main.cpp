@@ -23,11 +23,14 @@
 #include <cmath>
 #include <sstream>
 #include <random>
+#include <mutex>
 
 // Modules (to be implemented)
 #include "animation_manager.h"
 #include "message_handler.h"
 #include "control_interface.h"
+
+using Clock = std::chrono::steady_clock;
 
 // Global flag for graceful shutdown
 std::atomic<bool> keepRunning(true);
@@ -38,6 +41,35 @@ pid_t pythonPid = -1;
 // Background thread for key-triggered sound effects
 std::thread soundEffectThread;
 std::atomic<bool> soundEffectRunning(true);
+
+// Sound effect throttling to avoid piling up ffplay processes
+std::atomic<int> activeSoundEffects(0);
+constexpr int kMaxConcurrentSfx = 2;
+std::mutex soundEffectMutex;
+Clock::time_point lastSoundEffectTime = Clock::now();
+const std::string soundBasePath = "/home/operator/protogen-thought-display/sounds/";
+
+void playSoundEffect(const std::string& filename) {
+    auto now = Clock::now();
+    {
+        std::lock_guard<std::mutex> lock(soundEffectMutex);
+        if (now - lastSoundEffectTime < std::chrono::milliseconds(150)) {
+            return; // basic rate-limit
+        }
+        if (activeSoundEffects.load() >= kMaxConcurrentSfx) {
+            return; // avoid overwhelming audio device
+        }
+        lastSoundEffectTime = now;
+        activeSoundEffects++;
+    }
+
+    std::thread([filename]() {
+        std::ostringstream cmd;
+        cmd << "ffplay -nodisp -autoexit \"" << filename << "\" >/dev/null 2>&1";
+        std::system(cmd.str().c_str());
+        activeSoundEffects--;
+    }).detach();
+}
 
 // Signal handler for SIGINT/SIGTERM
 void signalHandler(int signal) {
@@ -71,31 +103,31 @@ int main() {
                 switch (ch) {
                     // Use ffplay for broader audio format support (e.g., .mp3, .ogg)
                     case '1':
-                        system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/dialup.ogg &");
+                        playSoundEffect(soundBasePath + "dialup.ogg");
                         break;
                     case '2':
-                        system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/geiger.wav &");
+                        playSoundEffect(soundBasePath + "geiger.wav");
                         break;
                     case '3':
-                        system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/codec.mp3 &");
+                        playSoundEffect(soundBasePath + "codec.mp3");
                         break;
                     case '4':
-                        system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/shodan.wav &");
+                        playSoundEffect(soundBasePath + "shodan.wav");
                         break;
                     case '5':
-                        system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/touchtone dial.mp3 &");
+                        playSoundEffect(soundBasePath + "touchtone dial.mp3");
                         break;
                     case '6':
-                        system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/alarm.mp3 &");
+                        playSoundEffect(soundBasePath + "alarm.mp3");
                         break;
                     case '7':
-                        system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/2600-hz-tone.mp3 &");
+                        playSoundEffect(soundBasePath + "2600-hz-tone.mp3");
                         break;
                     case '8':
-                        system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/womp.mp3 &");
+                        playSoundEffect(soundBasePath + "womp.mp3");
                         break;
                     case '9':
-                        system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/rimshot.mp3 &");
+                        playSoundEffect(soundBasePath + "rimshot.mp3");
                         break;
                     default:
                         break;
@@ -112,7 +144,7 @@ int main() {
     // Launch Python recognizer
     std::cout << CLR_CYAN << "[Main] :: [Launching $peech L1$ten3r . . .]" << CLR_RESET << std::endl;
     // Play startup sound (non-blocking)
-    system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/vaio.mp3 &");
+    playSoundEffect(soundBasePath + "vaio.mp3");
     pid_t pid = fork();
     if (pid == 0) {
         // Child process
@@ -132,7 +164,6 @@ int main() {
         return 1;
     }
 
-    using Clock = std::chrono::steady_clock;
     // Global subtitle state
     std::string subtitleText;
     auto lastSubtitleTime = Clock::now();
@@ -450,35 +481,35 @@ int main() {
                 keepRunning = false;
                 break;
             case '1':
-                system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/dialup.ogg &");
+                playSoundEffect(soundBasePath + "dialup.ogg");
                 break;
             case '2':
-                system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/geiger.wav &");
+                playSoundEffect(soundBasePath + "geiger.wav");
                 break;
             case '3':
-                system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/codec.mp3 &");
+                playSoundEffect(soundBasePath + "codec.mp3");
                 break;
             case '4':
-                system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/shodan.wav &");
+                playSoundEffect(soundBasePath + "shodan.wav");
                 break;
             case '5':
-                system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/touchtone\\ dial.mp3 &");
+                playSoundEffect(soundBasePath + "touchtone dial.mp3");
                 break;
             case '6':
                 // Corrected path prefix: /home/operator/protogen-thought-display
-                system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/alarm.mp3 &");
+                playSoundEffect(soundBasePath + "alarm.mp3");
                 break;
             case '7':
                 // Corrected path prefix: /home/operator/protogen-thought-display
-                system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/2600-hz-tone.mp3 &");
+                playSoundEffect(soundBasePath + "2600-hz-tone.mp3");
                 break;
             case '8':
                 // Corrected path prefix: /home/operator/protogen-thought-display
-                system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/womp.mp3 &");
+                playSoundEffect(soundBasePath + "womp.mp3");
                 break;
             case '9':
                 // Corrected path prefix: /home/operator/protogen-thought-display
-                system("ffplay -nodisp -autoexit /home/operator/protogen-thought-display/sounds/rimshot.mp3 &");
+                playSoundEffect(soundBasePath + "rimshot.mp3");
                 break;
             default:
                 break;
